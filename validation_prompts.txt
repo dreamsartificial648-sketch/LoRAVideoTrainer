@@ -1,0 +1,5 @@
+# Replace subject_token with the trigger used for your LoRA. Keep prompts and seeds
+# unchanged while comparing checkpoints from the same training run.
+subject_token speaking directly to the camera, medium close-up, static camera --w 832 --h 480 --f 49 --d 1701 --s 20
+subject_token turning toward the camera, close-up, neutral indoor lighting, static camera --w 832 --h 480 --f 49 --d 1702 --s 20
+subject_token walking outdoors in soft daylight, handheld medium shot --w 832 --h 480 --f 49 --d 1703 --s 20

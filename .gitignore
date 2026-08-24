@@ -1,0 +1,25 @@
+.venv/
+trainer-engine/
+
+# Large downloads and all user-created/private content.
+models/
+dataset/
+cache/
+output/
+samples/
+logs/
+_splitter_test/
+
+# Per-user runtime state and machine-specific paths.
+app_settings.json
+storyboard.json
+dataset_config.toml
+
+# Python/editor/OS noise.
+*.py[cod]
+__pycache__/
+.pytest_cache/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
