@@ -20,6 +20,8 @@ from tkinter import END, BooleanVar, DoubleVar, IntVar, StringVar, filedialog, m
 import tkinter as tk
 from tkinter import ttk
 
+from tools.workspace import initialize_workspace
+
 import av
 import psutil
 from PIL import Image, ImageTk
@@ -46,28 +48,7 @@ VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi"}
 
 def ensure_runtime_workspace() -> None:
     """Create an empty, machine-local workspace without shipping user data."""
-    for path in (DATASET_DIR, CACHE_DIR, MODELS_DIR, OUTPUT_DIR, SAMPLES_DIR, LOGS_DIR):
-        path.mkdir(parents=True, exist_ok=True)
-    if not DATASET_CONFIG.exists():
-        DATASET_CONFIG.write_text(
-            "\n".join([
-                "[general]",
-                "resolution = [448, 256]",
-                'caption_extension = ".txt"',
-                "batch_size = 1",
-                "enable_bucket = true",
-                "bucket_no_upscale = true",
-                "",
-                "[[datasets]]",
-                f'video_directory = "{DATASET_DIR.as_posix()}"',
-                f'cache_directory = "{CACHE_DIR.as_posix()}"',
-                "target_frames = [25, 49]",
-                'frame_extraction = "head"',
-                "num_repeats = 1",
-                "",
-            ]),
-            encoding="utf-8",
-        )
+    initialize_workspace(ROOT)
 
 
 class VideoLoraTrainerApp(tk.Tk):

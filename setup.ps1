@@ -39,7 +39,7 @@ if ($LASTEXITCODE -ne 0) { throw "Musubi Tuner dependencies could not be install
 & $Python -m pip install psutil tensorboard
 if ($LASTEXITCODE -ne 0) { throw "Desktop app dependencies could not be installed." }
 
-& $Python (Join-Path $ProjectRoot "app.py") --initialize
+& $Python (Join-Path $ProjectRoot "tools\workspace.py") --root $ProjectRoot
 if ($LASTEXITCODE -ne 0) { throw "The local workspace could not be initialized." }
 & $Python (Join-Path $ProjectRoot "tools\verify_setup.py")
 if ($LASTEXITCODE -ne 0) { throw "The setup check did not pass." }
