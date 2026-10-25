@@ -21,6 +21,7 @@ import tkinter as tk
 from tkinter import ttk
 
 from tools.workspace import initialize_workspace
+from tools import model_profiles as profiles
 
 import av
 import psutil
@@ -89,6 +90,7 @@ class VideoLoraTrainerApp(tk.Tk):
         self._build_variables()
         self._configure_theme()
         self._build_ui()
+        self._configure_model_controls()
         self._restore_last_tab()
         self._refresh_dataset()
         self._refresh_checkpoints()
@@ -97,6 +99,12 @@ class VideoLoraTrainerApp(tk.Tk):
         self.after(100, self._poll_events)
 
     def _build_variables(self) -> None:
+        self.model_var = StringVar(value=self.settings.get("model", profiles.WAN))
+        if self.model_var.get() not in profiles.LABELS:
+            self.model_var.set(profiles.WAN)
+        self.training_resolution_var = StringVar(value=self.settings.get("training_resolution", "256x256"))
+        self.training_frames_var = StringVar(value=self.settings.get("training_frames", "17" if self.model_var.get() == profiles.LTX else "8"))
+        self.preset_var = StringVar()
         self.trigger_var = StringVar(value=self.settings.get("trigger", "subject_token"))
         self.epochs_var = IntVar(value=int(self.settings.get("epochs", 12)))
         self.learning_rate_var = StringVar(value=self.settings.get("learning_rate", "0.0001"))
@@ -183,6 +191,14 @@ class VideoLoraTrainerApp(tk.Tk):
         header.columnconfigure(1, weight=1)
         ttk.Label(header, text="LoRA Video Trainer", style="Title.TLabel").grid(row=0, column=0, sticky="w")
         ttk.Label(header, textvariable=self.model_status_var, style="Muted.TLabel").grid(row=0, column=1, sticky="e")
+
+        self.model_combo = ttk.Combobox(header, textvariable=self.model_var, values=profiles.LABELS, state="readonly", width=31)
+        self.model_combo.grid(row=1, column=0, sticky="w", pady=(8, 0))
+        self.model_combo.bind("<<ComboboxSelected>>", self._on_model_selected)
+        model_actions = ttk.Frame(header)
+        model_actions.grid(row=1, column=1, sticky="e")
+        ttk.Button(model_actions, text="Install Model Backend", command=self._install_model_backend).pack(side="left", padx=4)
+        ttk.Button(model_actions, text="Download Model Files", command=self._download_model_files).pack(side="left", padx=4)
 
         self.notebook = ttk.Notebook(self)
         self.notebook.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 8))
@@ -298,6 +314,10 @@ class VideoLoraTrainerApp(tk.Tk):
             else:
                 widget = ttk.Entry(settings, textvariable=variable)
             widget.grid(row=row, column=1, sticky="ew", pady=5)
+            if variable is self.blocks_var:
+                self.training_blocks_widget = widget
+            elif variable is self.rank_var:
+                self.training_rank_widget = widget
         continuation_row = len(rows)
         ttk.Label(settings, text="LoRA Continuation").grid(row=continuation_row, column=0, sticky="w", pady=5, padx=(0, 8))
         continuation = ttk.Frame(settings)
@@ -312,7 +332,13 @@ class VideoLoraTrainerApp(tk.Tk):
             wraplength=500,
             style="Card.TLabel",
         ).grid(row=continuation_row + 1, column=0, columnspan=2, sticky="ew", pady=(2, 4))
-        ttk.Label(settings, text="Preset: 448x256, 25/49 frames, batch 1, fp8 base, bf16, gradient checkpointing", wraplength=500, style="Card.TLabel").grid(row=continuation_row + 2, column=0, columnspan=2, sticky="ew", pady=(6, 2))
+        ttk.Label(settings, textvariable=self.preset_var, wraplength=500, style="Card.TLabel").grid(row=continuation_row + 2, column=0, columnspan=2, sticky="ew", pady=(6, 2))
+        ttk.Label(settings, text="Training resolution").grid(row=continuation_row + 3, column=0, sticky="w")
+        self.training_resolution_combo = ttk.Combobox(settings, textvariable=self.training_resolution_var, state="readonly")
+        self.training_resolution_combo.grid(row=continuation_row + 3, column=1, sticky="ew", pady=4)
+        ttk.Label(settings, text="Frames per training clip").grid(row=continuation_row + 4, column=0, sticky="w")
+        self.training_frames_combo = ttk.Combobox(settings, textvariable=self.training_frames_var, state="readonly")
+        self.training_frames_combo.grid(row=continuation_row + 4, column=1, sticky="ew", pady=4)
 
         workflow = ttk.LabelFrame(tab, text="Workflow")
         workflow.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
@@ -381,7 +407,10 @@ class VideoLoraTrainerApp(tk.Tk):
             ttk.Label(controls, text=label).grid(row=2, column=index, sticky="w", padx=4)
             spinbox = ttk.Spinbox(controls, from_=low, to=high, textvariable=variable, width=11)
             spinbox.grid(row=3, column=index, sticky="ew", padx=4, pady=(2, 7))
+            if variable is self.generation_blocks_var:
+                self.generation_blocks_widget = spinbox
             if variable is self.fps_var:
+                self.generation_fps_widget = spinbox
                 spinbox.configure(command=self._on_fps_changed)
                 spinbox.bind("<FocusOut>", self._on_fps_changed)
                 spinbox.bind("<Return>", self._on_fps_changed)
@@ -390,7 +419,7 @@ class VideoLoraTrainerApp(tk.Tk):
             controls, text="Randomize each generation", variable=self.randomize_seed_var,
         ).grid(row=2, column=6, sticky="w", padx=4)
 
-        ttk.Label(controls, text="Wan format").grid(row=2, column=5, sticky="w", padx=4)
+        ttk.Label(controls, text="Video format").grid(row=2, column=5, sticky="w", padx=4)
         resolution_combo = ttk.Combobox(
             controls,
             textvariable=self.resolution_var,
@@ -398,6 +427,7 @@ class VideoLoraTrainerApp(tk.Tk):
             state="readonly",
             width=25,
         )
+        self.resolution_combo = resolution_combo
         resolution_combo.grid(row=3, column=5, columnspan=2, sticky="ew", padx=4, pady=(2, 7))
         resolution_combo.bind("<<ComboboxSelected>>", self._on_resolution_selected)
 
@@ -418,6 +448,7 @@ class VideoLoraTrainerApp(tk.Tk):
             highlightthickness=0,
             activebackground="#687af0",
         )
+        self.duration_scale = duration_scale
         duration_scale.grid(row=4, column=1, columnspan=4, sticky="ew", padx=6, pady=(2, 0))
         ttk.Label(controls, textvariable=self.duration_label_var, style="Card.TLabel").grid(row=4, column=5, columnspan=2, sticky="w", padx=6, pady=(4, 0))
         ttk.Checkbutton(
@@ -458,7 +489,7 @@ class VideoLoraTrainerApp(tk.Tk):
         self.generation_preview_label = ttk.Label(
             preview_panel,
             text="A finished generation's first frame will appear here.\n\n"
-                 "Wan decodes viewable pixels after denoising completes.",
+                 "Viewable pixels appear after denoising completes.",
             style="Card.TLabel",
             anchor="center",
             justify="center",
@@ -567,6 +598,7 @@ class VideoLoraTrainerApp(tk.Tk):
     def _enable_settings_autosave(self) -> None:
         """Save user-editable fields shortly after they change without interrupting typing."""
         variables = (
+            self.model_var, self.training_resolution_var, self.training_frames_var,
             self.trigger_var, self.epochs_var, self.learning_rate_var, self.rank_var,
             self.alpha_var, self.blocks_var, self.run_name_var, self.lora_continuation_var, self.checkpoint_var,
             self.prompt_var, self.lora_strength_var, self.resolution_var, self.fps_var,
@@ -603,7 +635,10 @@ class VideoLoraTrainerApp(tk.Tk):
     def _save_settings(self) -> bool:
         previous = self.settings
         payload = {
-            "settings_version": 3,
+            "settings_version": 4,
+            "model": self.model_var.get(),
+            "training_resolution": self.training_resolution_var.get(),
+            "training_frames": self.training_frames_var.get(),
             "trigger": str(self._variable_value(self.trigger_var, previous.get("trigger", "subject_token"))).strip(),
             "epochs": self._variable_value(self.epochs_var, previous.get("epochs", 12)),
             "learning_rate": str(self._variable_value(self.learning_rate_var, previous.get("learning_rate", "0.0001"))).strip(),
@@ -641,9 +676,129 @@ class VideoLoraTrainerApp(tk.Tk):
         self.settings_status_var.set(f"Settings saved automatically at {datetime.now():%I:%M:%S %p}")
         return True
 
+    def _backend_id(self) -> str:
+        return profiles.IDS[self.model_var.get()]
+
+    def _backend_python(self) -> Path:
+        return ROOT / "runtimes" / self._backend_id() / ".venv" / "Scripts" / "python.exe"
+
+    def _configure_model_controls(self) -> None:
+        native = self.model_var.get() != profiles.WAN
+        self.training_rank_widget.configure(to=64 if native else 128)
+        self.generation_fps_widget.configure(to=30 if native else 60)
+        self.duration_scale.configure(to=8.0 if self.model_var.get() == profiles.LTX else 15.0)
+        for widget in (self.training_blocks_widget, self.generation_blocks_widget):
+            widget.configure(state="disabled" if native else "normal")
+        if native:
+            contract = profiles.contract(self.model_var.get())
+            resolutions = contract.TRAINING_SETTINGS["resolution"]["options"]
+            frames = contract.TRAINING_SETTINGS["target_frames"]["options"]
+            formats = contract.GENERATION_SETTINGS["format"]["options"]
+            self.training_resolution_combo.configure(values=resolutions, state="readonly")
+            self.training_frames_combo.configure(values=frames, state="readonly")
+            if self.training_resolution_var.get() not in resolutions:
+                self.training_resolution_var.set(contract.TRAINING_SETTINGS["resolution"]["default"])
+            if self.training_frames_var.get() not in frames:
+                self.training_frames_var.set(contract.TRAINING_SETTINGS["target_frames"]["default"])
+            self.preset_var.set(
+                "Experimental: batch 1, cached latents/captions, attention LoRA, AdamW, gradient checkpointing. "
+                "Block swapping applies to Wan. Both cache buttons prepare video and captions together. "
+                "Continuation loads compatible weights with a fresh optimizer."
+            )
+        else:
+            formats = profiles.WAN_FORMATS
+            self.training_resolution_combo.configure(state="disabled")
+            self.training_frames_combo.configure(state="disabled")
+            self.preset_var.set("Wan preset: 448x256, 25/49 frames, batch 1, fp8 base, bf16, gradient checkpointing")
+        self.resolution_combo.configure(values=formats)
+        if self.resolution_var.get() not in formats:
+            self.resolution_var.set(formats[0])
+        self._on_resolution_selected()
+        self._on_fps_changed()
+
+    def _on_model_selected(self, _event=None) -> None:
+        self.lora_continuation_var.set("")
+        self.checkpoint_var.set("")
+        if self.model_var.get() == profiles.WAN:
+            self.rank_var.set(16)
+            self.alpha_var.set(16)
+            self.learning_rate_var.set("0.0001")
+            self.fps_var.set(12)
+        else:
+            contract = profiles.contract(self.model_var.get())
+            self.rank_var.set(contract.TRAINING_SETTINGS["rank"]["default"])
+            self.alpha_var.set(contract.TRAINING_SETTINGS["alpha"]["default"])
+            self.learning_rate_var.set(str(contract.TRAINING_SETTINGS["learning_rate"]["default"]))
+            self.training_frames_var.set(contract.TRAINING_SETTINGS["target_frames"]["default"])
+            self.training_resolution_var.set(contract.TRAINING_SETTINGS["resolution"]["default"])
+            self.fps_var.set(contract.GENERATION_SETTINGS["fps"]["default"])
+            self.steps_var.set(contract.GENERATION_SETTINGS["steps"]["default"])
+            self.resolution_var.set(contract.GENERATION_SETTINGS["format"]["default"])
+        self.duration_var.set(2.0)
+        self._configure_model_controls()
+        self._refresh_checkpoints()
+        self._refresh_status()
+        self._save_settings()
+
+    def _native_training_settings(self) -> dict:
+        return {
+            "trigger_word": self.trigger_var.get().strip(), "resolution": self.training_resolution_var.get(),
+            "target_frames": self.training_frames_var.get(), "rank": self.rank_var.get(),
+            "alpha": self.alpha_var.get(), "learning_rate": float(self.learning_rate_var.get()),
+        }
+
+    def _native_command(self, mode: str, settings: dict | None = None) -> list[str]:
+        if settings is None:
+            settings = {} if mode in {"download", "check"} else self._native_training_settings()
+        if mode not in {"download", "check"}:
+            profiles.contract(self.model_var.get()).settings_for("generation" if mode == "generate" else "training", settings)
+        command = [str(self._backend_python()), str(ROOT / "tools" / "video_backend.py"),
+                   "--backend", self._backend_id(), "--mode", mode, "--settings", json.dumps(settings)]
+        if mode == "train":
+            command.extend(["--name", self.run_name_var.get().strip(), "--epochs", str(self.epochs_var.get())])
+            if self.lora_continuation_var.get().strip():
+                command.extend(["--resume", self.lora_continuation_var.get().strip()])
+        if mode == "generate":
+            command.extend(["--checkpoint", self.checkpoint_var.get()])
+        return command
+
+    def _run_native(self, label: str, mode: str, settings: dict | None = None, scene_id: str | None = None) -> None:
+        if not self._backend_python().is_file():
+            messagebox.showwarning("Backend Needs Installation", "Click Install Model Backend for the selected model first.")
+            return
+        if self.active_thread and self.active_thread.is_alive():
+            messagebox.showwarning("Job Already Running", "Stop or wait for the current job first.")
+            return
+        try:
+            command = self._native_command(mode, settings)
+        except (ValueError, tk.TclError) as exc:
+            messagebox.showwarning("Invalid Model Settings", str(exc))
+            return
+        if scene_id:
+            self.pending_storyboard_scene_id = scene_id
+            self.pending_storyboard_samples = {str(path) for path in SAMPLES_DIR.glob("*.mp4")}
+        self._run_commands(label, [command])
+
+    def _install_model_backend(self) -> None:
+        script = ROOT / "setup.ps1" if self.model_var.get() == profiles.WAN else ROOT / "scripts" / "setup_video_backends.ps1"
+        command = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script)]
+        if self.model_var.get() != profiles.WAN:
+            command.extend(["-Backend", self._backend_id()])
+        self._run_commands("Install model backend", [command])
+
+    def _download_model_files(self) -> None:
+        if self.model_var.get() == profiles.WAN:
+            self._run_scripts("Download model files", [ROOT / "scripts" / "download_models.ps1"])
+        else:
+            self._run_native("Download model files", "download")
+
     def _refresh_status(self) -> None:
-        found = sum(path.exists() for path in (DIT_PATH, VAE_PATH, T5_PATH))
-        self.model_status_var.set(f"12 GB NVIDIA preset | Models: {found}/3 | Local workspace")
+        if self.model_var.get() == profiles.WAN:
+            found = sum(path.exists() for path in (DIT_PATH, VAE_PATH, T5_PATH))
+            self.model_status_var.set(f"Wan | Models: {found}/3 | Local workspace")
+        else:
+            installed = self._backend_python().is_file()
+            self.model_status_var.set(f"{self.model_var.get()} | Backend {'installed' if installed else 'needs installation'}")
 
     def _video_info(self, path: Path) -> tuple[str, str]:
         try:
@@ -989,12 +1144,21 @@ class VideoLoraTrainerApp(tk.Tk):
         self.status_var.set("Dataset and training cache cleared. Ready for a new project.")
 
     def _validate_dataset(self) -> None:
+        if self.model_var.get() != profiles.WAN:
+            self._run_native("Dataset validation", "validate")
+            return
         self._run_commands("Dataset validation", [[str(PYTHON), str(ROOT / "tools" / "validate_dataset.py"), "--trigger", self.trigger_var.get().strip()]])
 
     def _verify_setup(self) -> None:
+        if self.model_var.get() != profiles.WAN:
+            self._run_native("Setup check", "check")
+            return
         self._run_commands("Setup check", [[str(PYTHON), str(ROOT / "tools" / "verify_setup.py")]])
 
     def _run_scripts(self, label: str, scripts: list[Path]) -> None:
+        if self.model_var.get() != profiles.WAN:
+            self._run_native("Cache video and captions", "cache")
+            return
         commands = [["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script)] for script in scripts]
         self._run_commands(label, commands)
 
@@ -1012,6 +1176,8 @@ class VideoLoraTrainerApp(tk.Tk):
             self.lora_continuation_var.set(selected)
 
     def _training_command(self) -> list[str]:
+        if self.model_var.get() != profiles.WAN:
+            return self._native_command("train")
         name = self.run_name_var.get().strip() or "my_video_lora"
         command = [
             str(ACCELERATE), "launch", "--num_cpu_threads_per_process", "1", "--mixed_precision", "bf16",
@@ -1036,7 +1202,7 @@ class VideoLoraTrainerApp(tk.Tk):
             entered = simpledialog.askstring(
                 "Name This LoRA Model",
                 "Enter a unique name for this training run.\n\n"
-                "Example: my_character_wan21 or product_demo_wan21\n"
+                "Example: my_character_video or product_demo\n"
                 "An existing model name cannot be reused.",
                 parent=self,
                 initialvalue=self.run_name_var.get().strip(),
@@ -1051,6 +1217,8 @@ class VideoLoraTrainerApp(tk.Tk):
                 path for path in OUTPUT_DIR.glob(f"{name}*.safetensors")
                 if path.stem == name or path.stem.startswith(f"{name}-")
             ]
+            if self.model_var.get() != profiles.WAN and (OUTPUT_DIR / self._backend_id() / name).exists():
+                existing.append(OUTPUT_DIR / self._backend_id() / name)
             if existing:
                 messagebox.showwarning(
                     "Model Name Already Exists",
@@ -1065,6 +1233,7 @@ class VideoLoraTrainerApp(tk.Tk):
             if not messagebox.askyesno(
                 "Confirm Training Identity",
                 f"Train a new LoRA named:\n{name}\n\n"
+                f"Base model: {self.model_var.get()}\n"
                 f"Dataset clips: {clip_count}\n"
                 f"Trigger word: {self.trigger_var.get().strip() or '(none)'}\n"
                 f"Epochs: {self.epochs_var.get()}\n"
@@ -1081,12 +1250,18 @@ class VideoLoraTrainerApp(tk.Tk):
             return
         if not self._request_unique_training_name():
             return
+        if self.model_var.get() != profiles.WAN:
+            self._run_native("LoRA training", "train")
+            return
         self._run_commands("LoRA training", [self._training_command()])
 
     def _run_full_pipeline(self) -> None:
         if not self._validate_training_settings():
             return
         if not self._request_unique_training_name():
+            return
+        if self.model_var.get() != profiles.WAN:
+            self._run_native("Full training pipeline", "train")
             return
         commands = [
             [str(PYTHON), str(ROOT / "tools" / "validate_dataset.py"), "--trigger", self.trigger_var.get().strip()],
@@ -1114,6 +1289,20 @@ class VideoLoraTrainerApp(tk.Tk):
         except (tk.TclError, ValueError):
             messagebox.showwarning("Invalid Training Settings", "Check that every training number is filled in correctly.")
             return False
+        if self.model_var.get() != profiles.WAN:
+            try:
+                profiles.contract(self.model_var.get()).settings_for("training", self._native_training_settings())
+                if not 1 <= epochs <= 100:
+                    raise ValueError("Epochs must be between 1 and 100.")
+                continuation = self.lora_continuation_var.get().strip()
+                if continuation:
+                    profiles.contract(self.model_var.get()).checkpoint_info(Path(continuation))
+                if not self._backend_python().is_file():
+                    raise ValueError("Use Install Model Backend first.")
+            except (ValueError, ImportError, OSError) as exc:
+                messagebox.showwarning("Invalid Training Settings", str(exc))
+                return False
+            return True
         if not (1 <= epochs <= 100 and 1 <= rank <= 128 and 1 <= alpha <= 128 and 1 <= blocks <= 29 and learning_rate > 0):
             messagebox.showwarning("Invalid Training Settings", "Epochs, rank, alpha, block swap, or learning rate is outside its supported range.")
             return False
@@ -1145,6 +1334,7 @@ class VideoLoraTrainerApp(tk.Tk):
         self.workflow_status_var.set(f"Running: {label}")
         self.generation_status_var.set(f"Running: {label}" if label == "Video generation" else self.generation_status_var.get())
         self.status_var.set(f"Running: {label}")
+        self.model_combo.configure(state="disabled")
         self.stop_button.configure(state="normal")
         self.generation_stop_button.configure(state="normal")
         self.job_progress.configure(mode="indeterminate", maximum=100, value=0)
@@ -1469,13 +1659,15 @@ class VideoLoraTrainerApp(tk.Tk):
                         self.generation_preview_label.configure(
                             image="",
                             text=f"Denoising step {current}/{total}\n\n"
-                                 "An accurate frame becomes available when Wan loads its decoder.",
+                                 "An accurate frame becomes available after decoding.",
                         )
                         self.generation_preview_image = None
                 elif event == "finished":
                     label, code, cancelled = payload  # type: ignore[misc]
                     self.job_progress.stop()
                     self.job_progress.configure(mode="determinate", value=0)
+                    self.model_combo.configure(state="readonly")
+                    self._refresh_status()
                     self.stop_button.configure(state="disabled")
                     self.generation_stop_button.configure(state="disabled")
                     if cancelled:
@@ -1517,19 +1709,23 @@ class VideoLoraTrainerApp(tk.Tk):
 
     def _refresh_checkpoints(self) -> None:
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        checkpoints = sorted(OUTPUT_DIR.glob("*.safetensors"), key=lambda path: path.stat().st_mtime, reverse=True)
+        folder = OUTPUT_DIR if self.model_var.get() == profiles.WAN else OUTPUT_DIR / self._backend_id()
+        candidates = folder.glob("*.safetensors") if self.model_var.get() == profiles.WAN else folder.rglob("*.safetensors")
+        checkpoints = sorted(candidates, key=lambda path: path.stat().st_mtime, reverse=True)
         values = [str(path) for path in checkpoints]
         self.checkpoint_combo.configure(values=values)
-        if values and self.checkpoint_var.get() not in values:
-            self.checkpoint_var.set(values[0])
+        if self.checkpoint_var.get() not in values:
+            self.checkpoint_var.set(values[0] if values else "")
 
-    @staticmethod
-    def _frames_for_seconds(seconds: float, fps: int) -> int:
-        """Return the closest Wan-compatible frame count (4N+1) for a playback rate."""
-        return max(5, int(round((seconds * fps - 1) / 4)) * 4 + 1)
+    def _frames_for_seconds(self, seconds: float, fps: int) -> int:
+        return profiles.frames_for_seconds(self.model_var.get(), seconds, fps)
 
     def _on_resolution_selected(self, _event=None) -> None:
-        if self.resolution_var.get().startswith("Portrait"):
+        if self.model_var.get() != profiles.WAN:
+            width, height = map(int, self.resolution_var.get().split("x"))
+            self.width_var.set(width)
+            self.height_var.set(height)
+        elif self.resolution_var.get().startswith("Portrait"):
             self.width_var.set(480)
             self.height_var.set(832)
         else:
@@ -1538,7 +1734,7 @@ class VideoLoraTrainerApp(tk.Tk):
 
     def _set_fast_preview(self) -> None:
         """Use the quickest supported local-preview configuration."""
-        self.resolution_var.set("Landscape — 832 x 480")
+        self.resolution_var.set("Landscape — 832 x 480" if self.model_var.get() == profiles.WAN else "256x256")
         self._on_resolution_selected()
         self.duration_var.set(2.0)
         self.frames_var.set(self._frames_for_seconds(2.0, self.fps_var.get()))
@@ -1844,7 +2040,7 @@ class VideoLoraTrainerApp(tk.Tk):
 
     def _generate_video(self, storyboard_scene_id: str | None = None) -> None:
         checkpoint = Path(self.checkpoint_var.get())
-        if not checkpoint.exists():
+        if not checkpoint.is_file():
             messagebox.showwarning("No LoRA Checkpoint", "Train a LoRA or select an existing checkpoint first.")
             return
         if storyboard_scene_id is None and self.auto_prompt_var.get() and not self._pick_auto_prompt():
@@ -1874,6 +2070,16 @@ class VideoLoraTrainerApp(tk.Tk):
         frames = self._frames_for_seconds(duration, fps)
         self.frames_var.set(frames)
         self._update_duration_label()
+        if self.model_var.get() != profiles.WAN:
+            try:
+                profiles.contract(self.model_var.get()).checkpoint_info(checkpoint)
+                self._run_native("Video generation", "generate", {
+                    "prompt": self.prompt_var.get().strip(), "format": self.resolution_var.get(),
+                    "duration": duration, "fps": fps, "steps": steps, "seed": seed, "lora_strength": strength,
+                }, storyboard_scene_id)
+            except (ValueError, ImportError, OSError) as exc:
+                messagebox.showwarning("Generation Settings", str(exc))
+            return
         if (frames - 1) % 4 != 0:
             messagebox.showwarning("Invalid Frame Count", "Wan frame counts must follow 4N+1, such as 25, 49, or 81.")
             return

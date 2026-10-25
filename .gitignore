@@ -23,3 +23,6 @@ __pycache__/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Isolated ModelScope and LTX Python environments.
+runtimes/
