@@ -13,7 +13,8 @@ class ModelContracts(unittest.TestCase):
         self.assertEqual(profiles.frames_for_seconds(profiles.WAN, 2, 12), 25)
         self.assertEqual(profiles.frames_for_seconds(profiles.MODELSCOPE, 2, 8), 16)
         self.assertEqual(profiles.frames_for_seconds(profiles.LTX, 2, 24), 49)
-        for label in (profiles.MODELSCOPE, profiles.LTX):
+        self.assertEqual(profiles.frames_for_seconds(profiles.LTX25, .75, 24), 17)
+        for label in (profiles.MODELSCOPE, profiles.LTX, profiles.LTX25):
             contract = profiles.contract(label)
             for values in ({'rank': 65}, {'rank': 1.5}, {'learning_rate': float('nan')}, {'target_frames': '5'}):
                 with self.assertRaises(ValueError):
@@ -96,6 +97,8 @@ class ModelInterface(unittest.TestCase):
                         ui.model_var.set(label)
                         ui._on_model_selected()
                         ui.update_idletasks()
+                        if label == profiles.LTX25:
+                            self.assertEqual(ui.frames_var.get(), 17)
                         self.assertEqual(ui.checkpoint_var.get(), '')
                         command = ui._training_command()
                         if label == profiles.WAN:
@@ -111,7 +114,13 @@ class ModelInterface(unittest.TestCase):
                             self.assertEqual((ui.width_var.get(), ui.height_var.get()),
                                              (512, 320) if label == profiles.LTX else (256, 256))
                             ui._set_fast_preview()
+                            ui.update()
                             self.assertEqual((ui.width_var.get(), ui.height_var.get()), (256, 256))
+                            if label == profiles.LTX25:
+                                self.assertEqual(ui.frames_var.get(), 17)
+                                self.assertEqual(values['offload_percent'], 100)
+                                self.assertEqual(values['max_steps'], 1)
+                                self.assertTrue(values['train_audio'])
                 finally:
                     if ui.settings_save_after_id:
                         ui.after_cancel(ui.settings_save_after_id)

@@ -104,6 +104,13 @@ class VideoLoraTrainerApp(tk.Tk):
             self.model_var.set(profiles.WAN)
         self.training_resolution_var = StringVar(value=self.settings.get("training_resolution", "256x256"))
         self.training_frames_var = StringVar(value=self.settings.get("training_frames", "17" if self.model_var.get() == profiles.LTX else "8"))
+        self.ltx25_audio_var = BooleanVar(value=bool(self.settings.get('ltx25_audio', True)))
+        self.ltx25_offload_var = IntVar(value=int(self.settings.get('ltx25_offload', 100)))
+        self.ltx25_pin_var = BooleanVar(value=bool(self.settings.get('ltx25_pin', False)))
+        self.ltx25_max_steps_var = IntVar(value=int(self.settings.get('ltx25_max_steps', 1)))
+        self.ltx25_save_every_var = IntVar(value=int(self.settings.get('ltx25_save_every', 1)))
+        self.ltx25_profile_var = StringVar(value=self.settings.get('ltx25_profile', 'distilled'))
+        self.ltx25_negative_var = StringVar(value=self.settings.get('ltx25_negative', ''))
         self.preset_var = StringVar()
         self.trigger_var = StringVar(value=self.settings.get("trigger", "subject_token"))
         self.epochs_var = IntVar(value=int(self.settings.get("epochs", 12)))
@@ -120,6 +127,7 @@ class VideoLoraTrainerApp(tk.Tk):
         self.model_status_var = StringVar(value="Checking models...")
         self.workflow_status_var = StringVar(value="Idle")
         self.generation_status_var = StringVar(value="Idle")
+        self.generation_memory_hint_var = StringVar()
         self.settings_status_var = StringVar(value="Settings restore automatically")
         self.job_eta_var = StringVar(value="No job running")
         self.checkpoint_var = StringVar(value=self.settings.get("generation_checkpoint", ""))
@@ -192,7 +200,7 @@ class VideoLoraTrainerApp(tk.Tk):
         ttk.Label(header, text="LoRA Video Trainer", style="Title.TLabel").grid(row=0, column=0, sticky="w")
         ttk.Label(header, textvariable=self.model_status_var, style="Muted.TLabel").grid(row=0, column=1, sticky="e")
 
-        self.model_combo = ttk.Combobox(header, textvariable=self.model_var, values=profiles.LABELS, state="readonly", width=31)
+        self.model_combo = ttk.Combobox(header, textvariable=self.model_var, values=profiles.LABELS, state="readonly", width=48)
         self.model_combo.grid(row=1, column=0, sticky="w", pady=(8, 0))
         self.model_combo.bind("<<ComboboxSelected>>", self._on_model_selected)
         model_actions = ttk.Frame(header)
@@ -295,7 +303,7 @@ class VideoLoraTrainerApp(tk.Tk):
         tab.columnconfigure(1, weight=2)
         tab.rowconfigure(1, weight=1)
 
-        settings = ttk.LabelFrame(tab, text="RTX 3060 Training Settings")
+        settings = ttk.LabelFrame(tab, text="Training Settings")
         settings.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
         settings.columnconfigure(1, weight=1)
         rows = [
@@ -354,6 +362,21 @@ class VideoLoraTrainerApp(tk.Tk):
         ttk.Button(workflow, text="Open TensorBoard", command=self._open_tensorboard).grid(row=2, column=1, sticky="ew", padx=4, pady=4)
         ttk.Button(workflow, text="Check Setup", command=self._verify_setup).grid(row=2, column=2, sticky="ew", padx=4, pady=4)
         ttk.Label(workflow, textvariable=self.workflow_status_var, style="Card.TLabel").grid(row=3, column=0, columnspan=3, sticky="w", padx=4, pady=(8, 2))
+
+        self.ltx25_options = ttk.LabelFrame(workflow, text='LTX-2.5 memory and training')
+        self.ltx25_options.grid(row=4, column=0, columnspan=3, sticky='ew', pady=6)
+        self.ltx25_options.columnconfigure(1, weight=1)
+        ttk.Checkbutton(self.ltx25_options, text='Train synchronized audio', variable=self.ltx25_audio_var).grid(row=0, column=0, columnspan=2, sticky='w')
+        for row, (label, variable, low, high) in enumerate([
+            ('Offload layers to RAM (%)', self.ltx25_offload_var, 0, 100),
+            ('Step cap (0 = full epoch budget)', self.ltx25_max_steps_var, 0, 100000),
+            ('Save every N optimizer steps', self.ltx25_save_every_var, 1, 10000),
+        ], 1):
+            ttk.Label(self.ltx25_options, text=label).grid(row=row, column=0, sticky='w', padx=4)
+            ttk.Spinbox(self.ltx25_options, from_=low, to=high, textvariable=variable, width=9).grid(row=row, column=1, sticky='ew', padx=4, pady=2)
+        ttk.Checkbutton(self.ltx25_options, text='Pin host weights (uses more system RAM)', variable=self.ltx25_pin_var).grid(row=4, column=0, columnspan=2, sticky='w')
+        ttk.Button(self.ltx25_options, text='Model Access / Login', command=lambda: self._run_native('Hugging Face login', 'login')).grid(row=5, column=0, sticky='ew', pady=4)
+        ttk.Button(self.ltx25_options, text='Choose Model Storage', command=self._choose_ltx25_storage).grid(row=5, column=1, sticky='ew', pady=4)
 
         log_frame = ttk.LabelFrame(tab, text="Live Output")
         log_frame.grid(row=1, column=0, columnspan=2, sticky="nsew", pady=(12, 0))
@@ -451,17 +474,25 @@ class VideoLoraTrainerApp(tk.Tk):
         self.duration_scale = duration_scale
         duration_scale.grid(row=4, column=1, columnspan=4, sticky="ew", padx=6, pady=(2, 0))
         ttk.Label(controls, textvariable=self.duration_label_var, style="Card.TLabel").grid(row=4, column=5, columnspan=2, sticky="w", padx=6, pady=(4, 0))
-        ttk.Checkbutton(
-            controls,
-            text="Experimental speed mode (TF32; compiled mode disabled after compatibility failure)",
-            variable=self.experimental_speed_var,
-        ).grid(row=5, column=0, columnspan=7, sticky="w", padx=4, pady=(5, 2))
+        self.experimental_speed_widget = ttk.Checkbutton(
+            controls, text="Experimental speed mode (TF32; compiled mode disabled after compatibility failure)",
+            variable=self.experimental_speed_var)
+        self.experimental_speed_widget.grid(row=5, column=0, columnspan=7, sticky="w", padx=4, pady=(5, 2))
         ttk.Label(
             controls,
-            text="Lower Blocks to swap uses more VRAM and may reduce step time. Use 0-2 for speed if it fits; raise it if generation runs out of memory.",
+            textvariable=self.generation_memory_hint_var,
             style="Card.TLabel",
             wraplength=860,
         ).grid(row=6, column=0, columnspan=7, sticky="w", padx=4, pady=(0, 4))
+
+        self.ltx25_generation_options = ttk.Frame(controls)
+        self.ltx25_generation_options.grid(row=7, column=0, columnspan=7, sticky='ew', pady=4)
+        ttk.Label(self.ltx25_generation_options, text='LTX-2.5 base profile').pack(side='left')
+        ttk.Combobox(self.ltx25_generation_options, textvariable=self.ltx25_profile_var,
+                     values=('distilled', 'dev'), state='readonly', width=10).pack(side='left', padx=5)
+        ttk.Button(self.ltx25_generation_options, text='Use Base Model', command=lambda: self.checkpoint_var.set('')).pack(side='left', padx=5)
+        ttk.Label(self.ltx25_generation_options, text='Negative prompt (dev)').pack(side='left', padx=5)
+        ttk.Entry(self.ltx25_generation_options, textvariable=self.ltx25_negative_var).pack(side='left', fill='x', expand=True)
 
         actions = ttk.Frame(tab, padding=(0, 10))
         actions.grid(row=1, column=0, sticky="ew")
@@ -605,6 +636,8 @@ class VideoLoraTrainerApp(tk.Tk):
             self.duration_var, self.steps_var, self.generation_blocks_var,
             self.experimental_speed_var, self.seed_var, self.auto_scroll_var,
             self.randomize_seed_var, self.auto_prompt_var,
+            self.ltx25_audio_var, self.ltx25_offload_var, self.ltx25_pin_var,
+            self.ltx25_max_steps_var, self.ltx25_save_every_var, self.ltx25_profile_var, self.ltx25_negative_var,
         )
         for variable in variables:
             variable.trace_add("write", self._schedule_settings_save)
@@ -635,6 +668,13 @@ class VideoLoraTrainerApp(tk.Tk):
     def _save_settings(self) -> bool:
         previous = self.settings
         payload = {
+            'ltx25_audio': self._variable_value(self.ltx25_audio_var, True),
+            'ltx25_offload': self._variable_value(self.ltx25_offload_var, 100),
+            'ltx25_pin': self._variable_value(self.ltx25_pin_var, False),
+            'ltx25_max_steps': self._variable_value(self.ltx25_max_steps_var, 1),
+            'ltx25_save_every': self._variable_value(self.ltx25_save_every_var, 1),
+            'ltx25_profile': self._variable_value(self.ltx25_profile_var, 'distilled'),
+            'ltx25_negative': self._variable_value(self.ltx25_negative_var, ''),
             "settings_version": 4,
             "model": self.model_var.get(),
             "training_resolution": self.training_resolution_var.get(),
@@ -684,9 +724,23 @@ class VideoLoraTrainerApp(tk.Tk):
 
     def _configure_model_controls(self) -> None:
         native = self.model_var.get() != profiles.WAN
+        ltx25 = self.model_var.get() == profiles.LTX25
+        if ltx25:
+            self.ltx25_options.grid()
+            self.ltx25_generation_options.grid()
+            self.fps_var.set(24)
+        else:
+            self.ltx25_options.grid_remove()
+            self.ltx25_generation_options.grid_remove()
         self.training_rank_widget.configure(to=64 if native else 128)
-        self.generation_fps_widget.configure(to=30 if native else 60)
-        self.duration_scale.configure(to=8.0 if self.model_var.get() == profiles.LTX else 15.0)
+        self.generation_fps_widget.configure(to=30 if native else 60, state='disabled' if ltx25 else 'normal')
+        self.experimental_speed_widget.configure(state='disabled' if native else 'normal')
+        self.generation_memory_hint_var.set(
+            'LTX-2.5 uses the offloading settings on Training. Distilled always uses 8 steps; adapters use dev sampling steps.' if ltx25 else
+            'This backend uses cached features; Wan block-swap controls do not apply.' if native else
+            'Lower Blocks to swap uses more VRAM and may reduce step time. Raise it if generation runs out of memory.')
+        self.duration_scale.configure(from_=.5 if ltx25 else 2., resolution=.25 if ltx25 else .5,
+                                      to=8.0 if self.model_var.get() in {profiles.LTX, profiles.LTX25} else 15.0)
         for widget in (self.training_blocks_widget, self.generation_blocks_widget):
             widget.configure(state="disabled" if native else "normal")
         if native:
@@ -705,6 +759,10 @@ class VideoLoraTrainerApp(tk.Tk):
                 "Block swapping applies to Wan. Both cache buttons prepare video and captions together. "
                 "Continuation loads compatible weights with a fresh optimizer."
             )
+            if ltx25:
+                self.preset_var.set('Experimental RTX 3060 12 GB reference: INT8 base, BF16 compute, batch 1, '
+                    'gradient checkpointing, staged text encoder. 32 GB RAM recommended. GTX 1060 / 6 GB unsupported. '
+                    'Start with step cap 1; use 0 for full training. Continuation starts a fresh optimizer.')
         else:
             formats = profiles.WAN_FORMATS
             self.training_resolution_combo.configure(state="disabled")
@@ -734,23 +792,29 @@ class VideoLoraTrainerApp(tk.Tk):
             self.fps_var.set(contract.GENERATION_SETTINGS["fps"]["default"])
             self.steps_var.set(contract.GENERATION_SETTINGS["steps"]["default"])
             self.resolution_var.set(contract.GENERATION_SETTINGS["format"]["default"])
-        self.duration_var.set(2.0)
         self._configure_model_controls()
+        self.duration_var.set(.75 if self.model_var.get() == profiles.LTX25 else 2.0)
+        self._on_fps_changed()
         self._refresh_checkpoints()
         self._refresh_status()
         self._save_settings()
 
     def _native_training_settings(self) -> dict:
-        return {
+        values = {
             "trigger_word": self.trigger_var.get().strip(), "resolution": self.training_resolution_var.get(),
             "target_frames": self.training_frames_var.get(), "rank": self.rank_var.get(),
             "alpha": self.alpha_var.get(), "learning_rate": float(self.learning_rate_var.get()),
         }
+        if self.model_var.get() == profiles.LTX25:
+            values.update(train_audio=self.ltx25_audio_var.get(), offload_percent=self.ltx25_offload_var.get(),
+                          pin_host_memory=self.ltx25_pin_var.get(), max_steps=self.ltx25_max_steps_var.get(),
+                          save_every=self.ltx25_save_every_var.get())
+        return values
 
     def _native_command(self, mode: str, settings: dict | None = None) -> list[str]:
         if settings is None:
-            settings = {} if mode in {"download", "check"} else self._native_training_settings()
-        if mode not in {"download", "check"}:
+            settings = {} if mode in {"download", "check", "login"} else self._native_training_settings()
+        if mode not in {"download", "check", "login"}:
             profiles.contract(self.model_var.get()).settings_for("generation" if mode == "generate" else "training", settings)
         command = [str(self._backend_python()), str(ROOT / "tools" / "video_backend.py"),
                    "--backend", self._backend_id(), "--mode", mode, "--settings", json.dumps(settings)]
@@ -792,12 +856,26 @@ class VideoLoraTrainerApp(tk.Tk):
         else:
             self._run_native("Download model files", "download")
 
+    def _choose_ltx25_storage(self) -> None:
+        if self.active_thread and self.active_thread.is_alive():
+            messagebox.showwarning('Job Already Running', 'Wait for the current job before changing model storage.')
+            return
+        from tools.backends.ltx25_contract import runtime_root, store_root
+        folder = filedialog.askdirectory(title='Choose an LTX-2.5 weight store (SSD recommended)', initialdir=store_root())
+        if folder:
+            runtime = runtime_root()
+            runtime.mkdir(parents=True, exist_ok=True)
+            (runtime / 'paths.json').write_text(json.dumps({'store': str(Path(folder).resolve())}, indent=2), encoding='utf-8')
+            self.status_var.set(f'LTX-2.5 weight store: {folder}')
+
     def _refresh_status(self) -> None:
         if self.model_var.get() == profiles.WAN:
             found = sum(path.exists() for path in (DIT_PATH, VAE_PATH, T5_PATH))
             self.model_status_var.set(f"Wan | Models: {found}/3 | Local workspace")
         else:
             installed = self._backend_python().is_file()
+            if self.model_var.get() == profiles.LTX25:
+                installed = installed and (ROOT / 'runtimes/ltx25/runtime_ready.json').is_file()
             self.model_status_var.set(f"{self.model_var.get()} | Backend {'installed' if installed else 'needs installation'}")
 
     def _video_info(self, path: Path) -> tuple[str, str]:
@@ -929,6 +1007,8 @@ class VideoLoraTrainerApp(tk.Tk):
                 command.extend(["--caption-file", str(caption_file)])
             if archive and source in active_sources:
                 command.append("--archive-source")
+            if self.model_var.get() == profiles.LTX25:
+                command.append('--preserve-audio')
             commands.append(command)
         self.notebook.select(self.training_tab)
         self._run_commands(f"Split {len(sources)} video(s)", commands)
@@ -1711,7 +1791,8 @@ class VideoLoraTrainerApp(tk.Tk):
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         folder = OUTPUT_DIR if self.model_var.get() == profiles.WAN else OUTPUT_DIR / self._backend_id()
         candidates = folder.glob("*.safetensors") if self.model_var.get() == profiles.WAN else folder.rglob("*.safetensors")
-        checkpoints = sorted(candidates, key=lambda path: path.stat().st_mtime, reverse=True)
+        checkpoints = sorted((path for path in candidates if not path.name.endswith('.tmp.safetensors') and 'cache' not in path.relative_to(folder).parts),
+                             key=lambda path: path.stat().st_mtime, reverse=True)
         values = [str(path) for path in checkpoints]
         self.checkpoint_combo.configure(values=values)
         if self.checkpoint_var.get() not in values:
@@ -1736,8 +1817,9 @@ class VideoLoraTrainerApp(tk.Tk):
         """Use the quickest supported local-preview configuration."""
         self.resolution_var.set("Landscape — 832 x 480" if self.model_var.get() == profiles.WAN else "256x256")
         self._on_resolution_selected()
-        self.duration_var.set(2.0)
-        self.frames_var.set(self._frames_for_seconds(2.0, self.fps_var.get()))
+        duration = .75 if self.model_var.get() == profiles.LTX25 else 2.0
+        self.duration_var.set(duration)
+        self.frames_var.set(self._frames_for_seconds(duration, self.fps_var.get()))
         self.steps_var.set(8)
         self._update_duration_label()
         self.generation_status_var.set(
@@ -1746,7 +1828,9 @@ class VideoLoraTrainerApp(tk.Tk):
         )
 
     def _on_duration_changed(self, value: str) -> None:
-        seconds = round(float(value) * 2) / 2
+        increments = 4 if self.model_var.get() == profiles.LTX25 else 2
+        # Ignore stale Scale callbacks queued before a model/preset changed its variable.
+        seconds = round(self.duration_var.get() * increments) / increments
         if self.duration_var.get() != seconds:
             self.duration_var.set(seconds)
         self.frames_var.set(self._frames_for_seconds(seconds, self.fps_var.get()))
@@ -2040,7 +2124,7 @@ class VideoLoraTrainerApp(tk.Tk):
 
     def _generate_video(self, storyboard_scene_id: str | None = None) -> None:
         checkpoint = Path(self.checkpoint_var.get())
-        if not checkpoint.is_file():
+        if not checkpoint.is_file() and not (self.model_var.get() == profiles.LTX25 and not self.checkpoint_var.get()):
             messagebox.showwarning("No LoRA Checkpoint", "Train a LoRA or select an existing checkpoint first.")
             return
         if storyboard_scene_id is None and self.auto_prompt_var.get() and not self._pick_auto_prompt():
@@ -2064,7 +2148,8 @@ class VideoLoraTrainerApp(tk.Tk):
         if not 4 <= fps <= 60:
             messagebox.showwarning("Invalid FPS", "Playback FPS must be between 4 and 60.")
             return
-        if not 2.0 <= duration <= 15.0 or not 1 <= steps <= 100 or not 0 <= seed <= 2147483647 or not 0.0 <= strength <= 2.0:
+        minimum_duration = .5 if self.model_var.get() == profiles.LTX25 else 2.
+        if not minimum_duration <= duration <= 15.0 or not 1 <= steps <= 100 or not 0 <= seed <= 2147483647 or not 0.0 <= strength <= 2.0:
             messagebox.showwarning("Invalid Generation Settings", "Duration, steps, seed, or LoRA strength is outside its supported range.")
             return
         frames = self._frames_for_seconds(duration, fps)
@@ -2072,11 +2157,16 @@ class VideoLoraTrainerApp(tk.Tk):
         self._update_duration_label()
         if self.model_var.get() != profiles.WAN:
             try:
-                profiles.contract(self.model_var.get()).checkpoint_info(checkpoint)
-                self._run_native("Video generation", "generate", {
+                if self.checkpoint_var.get():
+                    profiles.contract(self.model_var.get()).checkpoint_info(checkpoint)
+                values = {
                     "prompt": self.prompt_var.get().strip(), "format": self.resolution_var.get(),
                     "duration": duration, "fps": fps, "steps": steps, "seed": seed, "lora_strength": strength,
-                }, storyboard_scene_id)
+                }
+                if self.model_var.get() == profiles.LTX25:
+                    values.update(profile=self.ltx25_profile_var.get(), negative_prompt=self.ltx25_negative_var.get(),
+                                  offload_percent=self.ltx25_offload_var.get(), pin_host_memory=self.ltx25_pin_var.get())
+                self._run_native("Video generation", "generate", values, storyboard_scene_id)
             except (ValueError, ImportError, OSError) as exc:
                 messagebox.showwarning("Generation Settings", str(exc))
             return

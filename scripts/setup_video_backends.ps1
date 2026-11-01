@@ -1,8 +1,15 @@
-param([ValidateSet('all', 'modelscope_video', 'ltx_video')][string]$Backend = 'all')
+param([ValidateSet('all', 'modelscope_video', 'ltx_video', 'ltx25')][string]$Backend = 'all', [string]$Ltx25Store = '')
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $Backends = if ($Backend -eq 'all') { @('modelscope_video', 'ltx_video') } else { @($Backend) }
 foreach ($SelectedBackend in $Backends) {
+    if ($SelectedBackend -eq 'ltx25') {
+        $SetupArgs = @((Join-Path $ProjectRoot 'tools\ltx25_runtime\setup_runtime.py'))
+        if ($Ltx25Store) { $SetupArgs += @('--store', $Ltx25Store) }
+        & py -3.10 @SetupArgs
+        if ($LASTEXITCODE -ne 0) { throw 'LTX-2.5 setup failed. Review the hardware/dependency error above.' }
+        continue
+    }
     $EnvironmentDir = Join-Path $ProjectRoot "runtimes\$SelectedBackend\.venv"
     $BackendPython = Join-Path $EnvironmentDir 'Scripts\python.exe'
     if (-not (Test-Path -LiteralPath $BackendPython)) {

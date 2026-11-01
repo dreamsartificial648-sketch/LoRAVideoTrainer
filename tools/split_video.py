@@ -24,10 +24,10 @@ def video_duration(path: Path) -> float:
     raise ValueError("The source video duration could not be determined.")
 
 
-def evenly_spaced_starts(duration: float, count: int) -> list[float]:
-    latest = duration - CLIP_SECONDS
+def evenly_spaced_starts(duration: float, count: int, clip_seconds: float = CLIP_SECONDS) -> list[float]:
+    latest = duration - clip_seconds
     if latest < 0:
-        raise ValueError(f"The source must be at least {CLIP_SECONDS:.2f} seconds long.")
+        raise ValueError(f"The source must be at least {clip_seconds:.2f} seconds long.")
     if count == 1:
         return [latest / 2]
     return [latest * index / (count - 1) for index in range(count)]
@@ -35,10 +35,10 @@ def evenly_spaced_starts(duration: float, count: int) -> list[float]:
 
 def unique_prefix(output_dir: Path, source_stem: str) -> str:
     prefix = f"{source_stem}_clip"
-    if not any(output_dir.glob(f"{prefix}_*.mp4")):
+    if not any(output_dir.glob(f"{prefix}_*.*")):
         return prefix
     run = 2
-    while any(output_dir.glob(f"{prefix}{run}_*.mp4")):
+    while any(output_dir.glob(f"{prefix}{run}_*.*")):
         run += 1
     return f"{prefix}{run}"
 
@@ -83,6 +83,18 @@ def encode_clip(source: Path, destination: Path, start: float) -> int:
     return written
 
 
+def encode_audio_clip(source: Path, destination: Path, start: float) -> None:
+    """Retain the original soundtrack as PCM against the same 24 FPS timeline."""
+    from tools.backends import ltx25_media as media
+    from tools.backends.ltx25 import segment
+    info = media.probe(source)
+    segment(source, destination, start, 3., info['width'] // 2 * 2, info['height'] // 2 * 2, bool(info['audio']))
+    result = media.probe(destination)
+    if (not result['video'] or abs(result['duration'] - 3.) > .1 or abs(result['fps'] - 24.) > .1
+            or (info['audio'] and not result['audio'])):
+        raise RuntimeError('The synchronized split did not preserve its requested timeline/audio.')
+
+
 def move_with_unique_name(source: Path, destination_dir: Path) -> Path:
     destination_dir.mkdir(parents=True, exist_ok=True)
     destination = destination_dir / source.name
@@ -123,6 +135,7 @@ def main() -> int:
     parser.add_argument("--trigger", default="subject_token")
     parser.add_argument("--archive-source", action="store_true")
     parser.add_argument("--cache-dir", type=Path)
+    parser.add_argument('--preserve-audio', action='store_true', help='LTX-2.5: 3-second 24 FPS MKV clips with PCM audio')
     args = parser.parse_args()
 
     source = args.source.resolve()
@@ -142,20 +155,24 @@ def main() -> int:
             caption = existing
 
     duration = video_duration(source)
-    starts = evenly_spaced_starts(duration, args.count)
+    starts = evenly_spaced_starts(duration, args.count, 3. if args.preserve_audio else CLIP_SECONDS)
     prefix = unique_prefix(output_dir, source.stem)
     print(
-        f"Source duration: {duration:.1f}s. Creating {len(starts)} evenly spaced clips, "
-        f"{OUTPUT_FRAMES} frames each at {OUTPUT_FPS} fps ({CLIP_SECONDS:.2f}s).",
+        f"Source duration: {duration:.1f}s. Creating {len(starts)} evenly spaced clips, " +
+        ('3-second 24 FPS clips with original audio retained when present.' if args.preserve_audio else
+         f"{OUTPUT_FRAMES} frames each at {OUTPUT_FPS} fps ({CLIP_SECONDS:.2f}s)."),
         flush=True,
     )
 
     created: list[Path] = []
     for index, start in enumerate(starts, start=1):
-        destination = output_dir / f"{prefix}_{index:03d}.mp4"
+        destination = output_dir / f"{prefix}_{index:03d}{'.mkv' if args.preserve_audio else '.mp4'}"
         print(f"[{index}/{len(starts)}] {destination.name} from {start:.2f}s", flush=True)
-        frames = encode_clip(source, destination, start)
-        if frames != OUTPUT_FRAMES:
+        if args.preserve_audio:
+            encode_audio_clip(source, destination, start)
+        else:
+            frames = encode_clip(source, destination, start)
+        if not args.preserve_audio and frames != OUTPUT_FRAMES:
             if destination.exists():
                 destination.unlink()
             raise RuntimeError(f"Only encoded {frames}/{OUTPUT_FRAMES} frames for clip {index}.")
@@ -170,4 +187,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     raise SystemExit(main())
