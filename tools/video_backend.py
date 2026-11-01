@@ -12,13 +12,13 @@ from datetime import datetime
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 ROOT = Path(__file__).resolve().parents[1]
-BACKENDS = ('modelscope_video', 'ltx_video')
+BACKENDS = ('modelscope_video', 'ltx_video', 'ltx25')
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--backend', choices=BACKENDS, required=True)
-    parser.add_argument('--mode', choices=('validate', 'cache', 'train', 'generate', 'download', 'check'), required=True)
+    parser.add_argument('--mode', choices=('validate', 'cache', 'train', 'generate', 'download', 'check', 'login'), required=True)
     parser.add_argument('--settings', default='{}', help='JSON settings for the selected operation')
     parser.add_argument('--dataset', type=Path, default=ROOT / 'dataset/videos')
     parser.add_argument('--name', default='my_video_lora')
@@ -26,6 +26,12 @@ def main():
     parser.add_argument('--resume', default='')
     parser.add_argument('--checkpoint', default='')
     args = parser.parse_args()
+    if args.backend == 'ltx25':
+        from tools.backends.ltx25 import run
+        run(args)
+        return
+    if args.mode == 'login':
+        raise ValueError('Model access login is provided for LTX-2.5 only.')
     contract = importlib.import_module(f'tools.backends.{args.backend}_contract')
     os.environ['HF_HOME'] = str(ROOT / 'models' / args.backend)
     os.environ.setdefault('HF_HUB_DISABLE_SYMLINKS_WARNING', '1')

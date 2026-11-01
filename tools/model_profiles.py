@@ -4,8 +4,9 @@ from importlib import import_module
 WAN = 'Wan 2.1 T2V 1.3B'
 MODELSCOPE = 'ModelScope T2V 1.7B'
 LTX = 'LTX-Video 2B 0.9.6 dev'
-LABELS = (WAN, MODELSCOPE, LTX)
-IDS = {MODELSCOPE: 'modelscope_video', LTX: 'ltx_video'}
+LTX25 = 'LTX-2.5 22B audio + video (experimental)'
+LABELS = (WAN, MODELSCOPE, LTX, LTX25)
+IDS = {MODELSCOPE: 'modelscope_video', LTX: 'ltx_video', LTX25: 'ltx25'}
 WAN_FORMATS = ('Landscape — 832 x 480', 'Portrait — 480 x 832')
 
 

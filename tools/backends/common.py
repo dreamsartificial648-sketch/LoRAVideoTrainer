@@ -11,7 +11,9 @@ VIDEO_EXTENSIONS = {'.mp4', '.mov', '.mkv', '.webm', '.m4v', '.avi'}
 
 
 def clips_in(folder):
-    return sorted(p for p in Path(folder).rglob('*') if p.is_file() and p.suffix.lower() in VIDEO_EXTENSIONS)
+    folder = Path(folder)
+    return sorted(p for p in folder.rglob('*') if p.is_file() and p.suffix.lower() in VIDEO_EXTENSIONS
+                  and '_source_archive' not in p.relative_to(folder).parts)
 
 
 def fingerprint(folder):

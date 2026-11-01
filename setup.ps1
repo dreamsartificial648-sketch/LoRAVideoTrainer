@@ -36,7 +36,7 @@ if ($LASTEXITCODE -ne 0) { throw "pip could not be updated." }
 if ($LASTEXITCODE -ne 0) { throw "PyTorch could not be installed." }
 & $Python -m pip install --editable $EngineDir
 if ($LASTEXITCODE -ne 0) { throw "Musubi Tuner dependencies could not be installed." }
-& $Python -m pip install psutil tensorboard
+& $Python -m pip install psutil tensorboard imageio-ffmpeg==0.6.0
 if ($LASTEXITCODE -ne 0) { throw "Desktop app dependencies could not be installed." }
 
 & $Python (Join-Path $ProjectRoot "tools\workspace.py") --root $ProjectRoot
